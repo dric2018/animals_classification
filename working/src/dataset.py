@@ -6,11 +6,13 @@ import pandas as pd
 import numpy as np
 from PIL import Image
 from sklearn.model_selection import train_test_split
+import config
+import albumentations as alb
 
 
-class CassavaDataset(Dataset):
+class AnimalsDataset(Dataset):
     def __init__(self, df,
-                 data_dir: os.path,
+                 data_dir: str = config.Config.data_dir,
                  task='train',
                  transform=None):
 
@@ -25,14 +27,17 @@ class CassavaDataset(Dataset):
 
     def __getitem__(self, index):
 
-        img_id = self.df.iloc[index].image_id
-        img = Image.open(os.path.join(self.images_dir, img_id))
-        img = np.array(img).transpose((2, 0, 1))
-        # transform to tensor and normalize
-        img = th.from_numpy(img).float() / 255.
+        img_path = self.df.iloc[index].path
+        img = Image.open(img_path)
+        img = np.array(img)  # .transpose((2, 0, 1))
+
         # apply transforms if not none
         if self.transform is not None:
-            img = self.transform(img)
+            img = self.transform(image=img)['image']
+            img = th.from_numpy(img.transpose((2, 0, 1))).float()
+        else:
+            # transform to tensor and normalize
+            img = th.from_numpy(img.transpose((2, 0, 1))).float() / 255.
 
         sample = {
             'x': img,  # image tensor
@@ -40,7 +45,8 @@ class CassavaDataset(Dataset):
         }
 
         if self.task == 'train':
-            target = self.df.iloc[index].label
+            label = self.df.iloc[index].label
+            target = config.Config.classes_map[label]
             sample.update({
                 'y': th.tensor(target, dtype=th.long)
             })
@@ -48,12 +54,10 @@ class CassavaDataset(Dataset):
         return sample
 
 
-class CassavaDM(pl.LightningDataModule):
+class DataModule(pl.LightningDataModule):
 
     def __init__(self,
                  df: pd.DataFrame,
-                 train_data_dir: str,
-                 test_data_dir: str,
                  data_transforms=None,
                  frac: float = 0,
                  train_batch_size: int = 64,
@@ -61,9 +65,7 @@ class CassavaDM(pl.LightningDataModule):
                  test_size: float = .1,
                  n_classes: int = 10
                  ):
-        super().__init__()
-        self.train_data_dir = train_data_dir
-        self.test_data_dir = test_data_dir
+        super(DataModule, self).__init__()
         self.frac = frac
         self.df = df
         self.train_batch_size = train_batch_size
@@ -79,18 +81,15 @@ class CassavaDM(pl.LightningDataModule):
 
         if self.frac > 0:
             train_df = train_df.sample(frac=self.frac).reset_index(drop=True)
-            self.train_ds = CassavaDataset(df=train_df,
-                                           data_dir=self.train_data_dir,
+            self.train_ds = AnimalsDataset(df=train_df,
                                            task='train',
                                            transform=self.data_transforms['train'])
         else:
-            self.train_ds = CassavaDataset(df=train_df,
-                                           data_dir=self.train_data_dir,
+            self.train_ds = AnimalsDataset(df=train_df,
                                            task='train',
                                            transform=self.data_transforms['train'])
 
-        self.val_ds = CassavaDataset(df=val_df,
-                                     data_dir=self.train_data_dir,
+        self.val_ds = AnimalsDataset(df=val_df,
                                      task='train',
                                      transform=self.data_transforms['test'])
 
@@ -107,10 +106,39 @@ class CassavaDM(pl.LightningDataModule):
         return DataLoader(dataset=self.train_ds,
                           batch_size=self.train_batch_size,
                           shuffle=True,
-                          num_workers=os.cpu_count())
+                          num_workers=config.Config.num_workers,
+                          pin_memory=True)
 
     def val_dataloader(self):
         return DataLoader(dataset=self.val_ds,
                           batch_size=self.test_batch_size,
                           shuffle=False,
-                          num_workers=os.cpu_count())
+                          num_workers=config.Config.num_workers,
+                          pin_memory=True)
+
+
+if __name__ == '__main__':
+
+    df = pd.read_csv(os.path.join(config.Config.data_dir, 'dataset.csv'))
+    data_transforms = {
+        "train": alb.Compose([
+            alb.Resize(height=config.Config.img_size,
+                       width=config.Config.img_size)
+        ]),
+        "test": alb.Compose([
+            alb.Resize(height=config.Config.img_size,
+                       width=config.Config.img_size)
+        ]),
+    }
+    dm = DataModule(
+        df=df,
+        frac=1,
+        test_size=.15,
+        data_transforms=data_transforms
+    )
+    dm.setup()
+
+    for data in dm.val_dataloader():
+        xs, ys = data
+        print(xs.size())
+        print(ys.size())
