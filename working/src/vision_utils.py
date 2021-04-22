@@ -4,9 +4,115 @@ import pandas as pd
 import config
 import matplotlib.pyplot as plt
 import torch as th
+import dataset
 
 import logging
 logging.basicConfig(level=logging.INFO)
+
+# learning rate schedule params
+LR_START = config.Config.lr
+LR_MAX = config.Config.lr / .1
+LR_RAMPUP_EPOCHS = 5
+LR_SUSTAIN_EPOCHS = 0
+LR_STEP_DECAY = 0.7
+# CUSTOM LEARNING SCHEUDLE
+# """
+# from https://www.kaggle.com/cdeotte/how-to-compete-with-gpus-workshop#STEP-4:-Training-Schedule
+# """
+
+
+def ramp_scheduler(epoch):
+    if epoch < LR_RAMPUP_EPOCHS:
+        lr = (LR_MAX - LR_START) / LR_RAMPUP_EPOCHS * epoch + LR_START
+    elif epoch < LR_RAMPUP_EPOCHS + LR_SUSTAIN_EPOCHS:
+        lr = LR_MAX
+    else:
+        lr = LR_MAX * \
+            LR_STEP_DECAY**((epoch - LR_RAMPUP_EPOCHS - LR_SUSTAIN_EPOCHS)//10)
+    return lr
+
+
+def view_sample(dataset: dataset.AnimalsDataset = None,
+                images: th.Tensor = None,
+                labels: th.Tensor = None,
+                predictions: list = None,
+                size=5,
+                denorm=False,
+                return_image=False,
+                show=True):
+
+    assert (
+        labels.size(0) == len(predictions)
+    ), f"Targets and predictions should have the same lengths. Label length is {labels.size(0)} while predictions is {len(predictions)}"
+
+    tok = tokenizer.Tokenizer()
+
+    fig = plt.figure(figsize=(size * size, size * 3))
+    images, labels = images.cpu().detach(), labels.cpu().detach()
+    if images is not None:
+        for idx, data in enumerate(zip(images, labels, predictions)):
+            img, target, prediction = data[0], data[1], data[2]
+
+            if denorm:
+                img = denormalize(img)
+            else:
+                img = img.transpose(1, 0).transpose(2, 1)
+                img = np.clip(img, 0, 1)
+
+            label = tok.decode(ids=target)
+
+            ax = plt.subplot(size, size, idx + 1)
+
+            plt.imshow(img)
+            plt.title('label : ' + label, size=15)
+            # plt.axis("off")
+            plt.xlabel("prediction : " + prediction, size=15)
+            if idx == size**2 - 1:
+                if show:
+                    plt.show()
+
+                if return_image:
+                    buf = io.BytesIO()
+                    plt.savefig(buf, format='png', orientation='portrait')
+                    plt.close(fig)
+                    buf.seek(0)
+                    image = Image.open(buf)
+
+                    return image
+                break
+
+    else:
+        for idx, data in enumerate(dataset):
+            img, target = data['img'], data['label']
+            if denorm:
+                img = denormalize(img)
+            else:
+                img = img.transpose(1, 0).transpose(2, 1)
+                img = np.clip(img, 0, 1)
+
+            label = tok.decode(ids=target)
+
+            ax = plt.subplot(size, size, idx + 1)
+
+            plt.imshow(img)
+            plt.title('label : ' + label, size=15)
+            # plt.axis("off")
+            plt.xlabel("prediction : " + prediction, size=15)
+
+            if idx == size**2 - 1:
+                if show:
+                    plt.show()
+
+                if return_image:
+                    buf = io.BytesIO()
+                    plt.savefig(buf, format='png', orientation='portrait')
+                    plt.close(fig)
+                    buf.seek(0)
+                    image = Image.open(buf)
+
+                    return image
+
+                break
 
 
 def denormalize(img: th.tensor, mean: list = [0.485, 0.456, 0.406], std: list = [0.229, 0.224, 0.225]):

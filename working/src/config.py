@@ -15,9 +15,13 @@ class Config:
     device = 'cuda'
     img_size = 300
     n_channels = 3
-    base_model = 'resnet18'
+    base_model = 'resnet34'
+    optimizer = 'adamw'
+    eps = 1e-08
+    weight_decay = 1e-2
     precision = 32
     num_workers = 2
+    dropout_rate = .2
     classes_map = {
         "butterfly": 0,
         "cat": 1,

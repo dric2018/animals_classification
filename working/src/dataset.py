@@ -47,7 +47,7 @@ class AnimalsDataset(Dataset):
             label = self.df.iloc[index].label
             target = config.Config.classes_map[label]
             sample.update({
-                'y': th.tensor(target, dtype=th.long).view(1, -1)
+                'y': th.tensor(target, dtype=th.long)
             })
 
         return sample
@@ -59,8 +59,8 @@ class DataModule(pl.LightningDataModule):
                  df: pd.DataFrame,
                  data_transforms=None,
                  frac: float = 0,
-                 train_batch_size: int = 64,
-                 test_batch_size: int = 32,
+                 train_batch_size: int = config.Config.train_batch_size,
+                 test_batch_size: int = config.Config.train_batch_size,
                  test_size: float = .1,
                  n_classes: int = 10
                  ):
@@ -106,14 +106,14 @@ class DataModule(pl.LightningDataModule):
                           batch_size=self.train_batch_size,
                           shuffle=True,
                           num_workers=config.Config.num_workers,
-                          pin_memory=True)
+                          pin_memory=False)
 
     def val_dataloader(self):
         return DataLoader(dataset=self.val_ds,
                           batch_size=self.test_batch_size,
                           shuffle=False,
                           num_workers=config.Config.num_workers,
-                          pin_memory=True)
+                          pin_memory=False)
 
 
 if __name__ == '__main__':
