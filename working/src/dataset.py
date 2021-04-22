@@ -29,12 +29,11 @@ class AnimalsDataset(Dataset):
 
         img_path = self.df.iloc[index].path
         img = Image.open(img_path)
-        img = np.array(img)  # .transpose((2, 0, 1))
-
+        img = np.array(img)
         # apply transforms if not none
         if self.transform is not None:
             img = self.transform(image=img)['image']
-            img = th.from_numpy(img.transpose((2, 0, 1))).float()
+            img = th.from_numpy(img.transpose((2, 0, 1)))
         else:
             # transform to tensor and normalize
             img = th.from_numpy(img.transpose((2, 0, 1))).float() / 255.
@@ -48,7 +47,7 @@ class AnimalsDataset(Dataset):
             label = self.df.iloc[index].label
             target = config.Config.classes_map[label]
             sample.update({
-                'y': th.tensor(target, dtype=th.long)
+                'y': th.tensor(target, dtype=th.long).view(1, -1)
             })
 
         return sample
