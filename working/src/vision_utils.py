@@ -5,8 +5,12 @@ import config
 import matplotlib.pyplot as plt
 import torch as th
 import dataset
-
+from tqdm.auto import tqdm
+import re
 import logging
+import io
+from PIL import Image
+
 logging.basicConfig(level=logging.INFO)
 
 # learning rate schedule params
@@ -32,90 +36,139 @@ def ramp_scheduler(epoch):
     return lr
 
 
-def view_sample(dataset: dataset.AnimalsDataset = None,
-                images: th.Tensor = None,
-                labels: th.Tensor = None,
-                predictions: list = None,
-                size=5,
-                denorm=False,
-                return_image=False,
-                show=True):
+def atoi(text):
+    # from  https://stackoverflow.com/questions/5967500/how-to-correctly-sort-a-string-with-a-number-inside#5967539
+    return int(text) if text.isdigit() else text
 
-    assert (
-        labels.size(0) == len(predictions)
-    ), f"Targets and predictions should have the same lengths. Label length is {labels.size(0)} while predictions is {len(predictions)}"
 
-    tok = tokenizer.Tokenizer()
+def natural_keys(text):
+    # from  https://stackoverflow.com/questions/5967500/how-to-correctly-sort-a-string-with-a-number-inside#5967539
+    '''
+    alist.sort(key=natural_keys) sorts in human order
+    http://nedbatchelder.com/blog/200712/human_sorting.html
+    (See Toothy's implementation in the comments)
+    '''
+    return [atoi(c) for c in re.split(r'(\d+)', text)]
 
-    fig = plt.figure(figsize=(size * size, size * 3))
-    images, labels = images.cpu().detach(), labels.cpu().detach()
-    if images is not None:
-        for idx, data in enumerate(zip(images, labels, predictions)):
-            img, target, prediction = data[0], data[1], data[2]
 
-            if denorm:
-                img = denormalize(img)
-            else:
-                img = img.transpose(1, 0).transpose(2, 1)
-                img = np.clip(img, 0, 1)
+def save_experiment_conf():
 
-            label = tok.decode(ids=target)
+    walk = [
+        folder
+        for folder in os.listdir(os.path.join(config.Config.logs_dir, 'animals'))
+        if ("version" in folder) and (len(folder.split('.')) <= 1)
+    ]
 
-            ax = plt.subplot(size, size, idx + 1)
+    # sort the versions list
+    walk.sort(key=natural_keys)
 
-            plt.imshow(img)
-            plt.title('label : ' + label, size=15)
-            # plt.axis("off")
-            plt.xlabel("prediction : " + prediction, size=15)
-            if idx == size**2 - 1:
-                if show:
-                    plt.show()
-
-                if return_image:
-                    buf = io.BytesIO()
-                    plt.savefig(buf, format='png', orientation='portrait')
-                    plt.close(fig)
-                    buf.seek(0)
-                    image = Image.open(buf)
-
-                    return image
-                break
-
+    if len(walk) > 0:
+        version = int(walk[-1].split('version_')[-1]) + 1
     else:
-        for idx, data in enumerate(dataset):
-            img, target = data['img'], data['label']
-            if denorm:
-                img = denormalize(img)
-            else:
-                img = img.transpose(1, 0).transpose(2, 1)
-                img = np.clip(img, 0, 1)
+        version = 0
 
-            label = tok.decode(ids=target)
+    # save experiment config
 
-            ax = plt.subplot(size, size, idx + 1)
+    with open(
+            os.path.join(config.Config.logs_dir, 'animals',
+                         f'conf-exp-{version}.txt'), 'w') as conf:
+        conf.write(
+            f'================== Config file version {version} ===================\n\n'
+        )
+        d = dict(config.Config.__dict__)
+        conf_dict = {k: d[k] for k in d.keys() if '__' not in k}
 
-            plt.imshow(img)
-            plt.title('label : ' + label, size=15)
-            # plt.axis("off")
-            plt.xlabel("prediction : " + prediction, size=15)
+        for k in conf_dict:
+            v = conf_dict[k]
+            conf.write(f'{k} : {v}\n')
 
-            if idx == size**2 - 1:
-                if show:
-                    plt.show()
-
-                if return_image:
-                    buf = io.BytesIO()
-                    plt.savefig(buf, format='png', orientation='portrait')
-                    plt.close(fig)
-                    buf.seek(0)
-                    image = Image.open(buf)
-
-                    return image
-
-                break
+    return version
 
 
-def denormalize(img: th.tensor, mean: list = [0.485, 0.456, 0.406], std: list = [0.229, 0.224, 0.225]):
+def make_folds(data: pd.DataFrame,
+               n_folds: int = 5,
+               target_col='label',
+               stratified: bool = True):
+    data['fold'] = 0
+
+    if stratified:
+        fold = StratifiedKFold(n_splits=n_folds,
+                               random_state=config.Config.seed_value,
+                               shuffle=True)
+    else:
+
+        fold = KFold(n_splits=n_folds,
+                     random_state=config.Config.seed_val,
+                     shuffle=True)
+
+    for i, (tr, vr) in tqdm(enumerate(fold.split(data,
+                                                 data[target_col].values)),
+                            desc='Splitting',
+                            total=n_folds):
+        data.loc[vr, 'fold'] = i
+
+    return data, n_folds
+
+
+def view_sample(
+        images: th.Tensor = None,
+        labels: th.Tensor = None,
+        predictions: list = None,
+        size=5,
+        return_image=False,
+        show=True):
+
+    image = None
+    try:
+        images, labels, predictions = images.cpu().detach(
+        ), labels.cpu().detach(), predictions.cpu().detach()
+
+        f, axes = plt.subplots(size, size, figsize=(size * size, size * 3))
+        im_idx = 0
+
+        for l in range(size):
+            for c in range(size):
+                if im_idx < images.size(0):
+                    f.tight_layout(pad=1.0)
+                    img = denormalize(images[im_idx])
+                    label = get_label_from_target(
+                        labels[im_idx].item())
+                    pred = get_label_from_target(
+                        predictions[im_idx].item())
+                    axes[l][c].imshow(img)
+                    axes[l][c].set_title(f'label : {label}')
+                    axes[l][c].set_xlabel(f'prediction : {pred}')
+                    axes[l][c].set_xticks([])
+                    axes[l][c].set_yticks([])
+                    im_idx += 1
+                else:
+                    axes[l][c].axis('off')
+                    pass
+        if show:
+            plt.show()
+
+        if return_image:
+            try:
+                buf = io.BytesIO()
+                f.savefig(buf, format='png', orientation='portrait')
+                plt.close(f)
+                buf.seek(0)
+                image = Image.open(buf)
+
+            except Exception as e:
+                logging.error(
+                    msg=f'Could not create images grid. Reason : {e}')
+
+    except Exception as e:
+        logging.error(msg=f'{e}')
+
+    return image
+
+
+def denormalize(img: th.tensor,
+                mean: list = [0.485, 0.456, 0.406],
+                std: list = [0.229, 0.224, 0.225]
+                ):
     img = img.numpy().transpose((1, 2, 0))
     if (mean is not None) and (std is not None):
         mean = np.array(mean)

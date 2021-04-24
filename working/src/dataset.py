@@ -28,7 +28,7 @@ class AnimalsDataset(Dataset):
     def __getitem__(self, index):
 
         img_path = self.df.iloc[index].path
-        img = Image.open(img_path)
+        img = Image.open(img_path).convert('RGB')
         img = np.array(img)
         # apply transforms if not none
         if self.transform is not None:
@@ -106,14 +106,14 @@ class DataModule(pl.LightningDataModule):
                           batch_size=self.train_batch_size,
                           shuffle=True,
                           num_workers=config.Config.num_workers,
-                          pin_memory=False)
+                          pin_memory=True)
 
     def val_dataloader(self):
         return DataLoader(dataset=self.val_ds,
                           batch_size=self.test_batch_size,
                           shuffle=False,
                           num_workers=config.Config.num_workers,
-                          pin_memory=False)
+                          pin_memory=True)
 
 
 if __name__ == '__main__':
@@ -138,6 +138,11 @@ if __name__ == '__main__':
     dm.setup()
 
     for data in dm.val_dataloader():
-        xs, ys = data
+        xs, ys = data['x'], data['y']
+        print(xs.size())
+        print(ys.size())
+
+    for data in dm.train_dataloader():
+        xs, ys = data['x'], data['y']
         print(xs.size())
         print(ys.size())

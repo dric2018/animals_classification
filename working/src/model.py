@@ -12,6 +12,7 @@ import os
 import vision_utils
 import dataset
 import albumentations as alb
+from typing import Optional, List
 import logging
 
 logging.basicConfig(level=logging.INFO)
@@ -19,14 +20,14 @@ logging.basicConfig(level=logging.INFO)
 
 class Model(pl.LightningModule):
     def __init__(self,
-                 dropout=Config.dropout_rate,
+                 dropout_rate=Config.dropout_rate,
                  pretrained=False,
                  model_name=Config.base_model):
         super(Model, self).__init__()
 
         self.pretrained = pretrained
 
-        self.best_f1 = -np.inf
+        self.best_loss = np.inf
 
         logging.info(
             msg=f'Using {Config.base_model} as features extractor')
@@ -36,7 +37,7 @@ class Model(pl.LightningModule):
             pretrained=pretrained,
             num_classes=768,
         )
-
+        self.dropout = nn.Dropout(p=dropout_rate)
         self.decoder = nn.Linear(
             in_features=768,
             out_features=10
@@ -94,20 +95,23 @@ class Model(pl.LightningModule):
 
             return [opt], [scheduler]
 
-    def forward(self, inputs, targets=None):
-        print(f'[Model info] inputs {inputs.size()}')
+    def forward(self, inputs: th.Tensor, targets: Optional[th.Tensor] = None):
+        # print(f'[Model info] inputs {inputs.size()}')
 
         features = self.encoder(inputs)
-        print(f'[Model info] features {features.size()}')
-
+        # print(f'[Model info] features {features.size()}')
+        features = self.dropout(features)
         logits = self.decoder(features)
-        print(f'[Model info] logits {logits.size()}')
+        # print(f'[Model info] logits {logits.size()}')
 
         if targets is not None:
-            print('[Model info] targets ', targets.size())
+            # print('[Model info] targets ', targets.size())
 
             loss = self.get_loss(logits=logits,
                                  targets=targets)
+
+        else:
+            loss = None
 
         return logits, loss
 
@@ -119,12 +123,12 @@ class Model(pl.LightningModule):
             inputs=images,
             targets=targets
         )
-
+        pred_ids = log_probs.softmax(dim=-1)
         # compute metrics
-        train_acc = self.get_accuracy(pred_ids=pred_ids, targets=targets)
-        train_f1 = self.get_f1(preds=preds, targets=targets)
-        train_recall = self.get_recall(preds=preds, targets=targets)
-        train_precision = self.get_precision(preds=preds, targets=targets)
+        train_acc = self.get_acc(preds=pred_ids, targets=targets)
+        train_f1 = self.get_f1(preds=pred_ids, targets=targets)
+        train_recall = self.get_recall(preds=pred_ids, targets=targets)
+        train_precision = self.get_precision(preds=pred_ids, targets=targets)
 
         # logging phase
 
@@ -181,12 +185,12 @@ class Model(pl.LightningModule):
             inputs=images,
             targets=targets
         )
-
+        pred_ids = log_probs.softmax(dim=-1)
         # compute metrics
-        val_acc = self.get_accuracy(preds=preds, targets=targets)
-        val_f1 = self.get_f1(preds=preds, targets=targets)
-        val_recall = self.get_recall(preds=preds, targets=targets)
-        val_precision = self.get_precision(preds=preds, targets=targets)
+        val_acc = self.get_acc(preds=pred_ids, targets=targets)
+        val_f1 = self.get_f1(preds=pred_ids, targets=targets)
+        val_recall = self.get_recall(preds=pred_ids, targets=targets)
+        val_precision = self.get_precision(preds=pred_ids, targets=targets)
 
         # logging phase
         self.log("val_loss",
@@ -232,7 +236,7 @@ class Model(pl.LightningModule):
             "precision": val_precision,
             "images": images,
             "targets": targets,
-            "predictions": pred_texts
+            "predictions": pred_ids.argmax(dim=-1)
         }
 
     def validation_epoch_end(self, outputs):
@@ -249,14 +253,16 @@ class Model(pl.LightningModule):
         # precision
         avg_precision = th.stack([x['precision'] for x in outputs]).mean()
         # images
-        images = th.stack([x['images'] for x in outputs])
+        images = th.stack([x['images'] for x in outputs])[0]
         # targets
-        targets = th.stack([x['targets'] for x in outputs])
+        targets = th.stack([x['targets'] for x in outputs])[0]
         # predictions
-        predictions = [x['predictions'] for x in outputs]
+        predictions = th.stack([x['predictions'] for x in outputs])[0]
 
         # print(images.size())
         # print(targets.size())
+        # print(predictions.size())
+        # print(targets, predictions)
         # logging using tensorboard logger
         grid = vision_utils.view_sample(images=images,
                                         labels=targets,
@@ -284,17 +290,17 @@ class Model(pl.LightningModule):
         self.logger.experiment.add_scalar("Precision/Validation", avg_precision,
                                           self.current_epoch)
         # monitor f1-score improvements
-        if avg_f1 > self.best_f1:
+        if avg_loss < self.best_loss:
             print("\n")
             print(
-                f'[INFO] validation F1-score improved from {self.best_f1} to {avg_f1}'
+                f'[INFO] validation loss improved from {self.best_loss} to {avg_loss}'
             )
-            self.best_f1 = avg_f1
+            self.best_loss = avg_loss
             print()
         else:
             print("\n")
             print(
-                f'[INFO] validation F1-score did not improve... still at {self.best_f1}'
+                f'[INFO] validation loss did not improve... still at {self.best_loss}'
             )
             print()
 
@@ -318,7 +324,7 @@ class Model(pl.LightningModule):
         targets = targets.cpu()
         # print("targets", targets.size())
         # print("logits", logits.size())
-        return th.nn.CrossEntropyLoss()(input=logits, target=targets)
+        return F.cross_entropy(input=logits, target=targets)
 
     def get_acc(self, preds, targets):
         preds = preds.cpu()
